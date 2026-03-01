@@ -1,0 +1,35 @@
+###
+# https://github.com/puffingprie/GetEveModels
+# got a hint for download link in there 
+###
+
+
+###
+GET https://resources.eveonline.com/
+
+
+###
+GET https://resources.eveonline.com/9f/9f2c17005c7f0495_768bb7a2a65a6911864427d354c873c9
+
+
+###
+# res:/graphics/character/female/paperdoll/outer/vanguardf01/vanguardf01.black,
+# f9/f9ab917c3b9fea0d_a2346298f3802b3808830ea0cd4cb272,
+# a2346298f3802b3808830ea0cd4cb272,
+# 2111,921
+GET https://resources.eveonline.com/f9/f9ab917c3b9fea0d_a2346298f3802b3808830ea0cd4cb272
+
+
+###
+# res:/graphics/character/female/paperdoll/scars/head/heroscar07/types/heroscar07_v0.type,
+# b1/b155e3b49143eba3_9fa54a385ced0472e565619274b0d187,
+# 9fa54a385ced0472e565619274b0d187,
+# 53,111
+GET https://resources.eveonline.com/f9/f9ab917c3b9fea0d_a2346298f3802b3808830ea0cd4cb272
+
+
+###
+GET https://resources.eveonline.com/a9/a9d1721dd5cc6d54_e6bbb2df307e5a9527159a4c971034b5
+
+###
+
