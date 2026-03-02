@@ -15,6 +15,10 @@
  *     absolute_offset = 0x20 (magic size) + header.sections_offset
  *   matching LSLib's read/write behavior.
  */
+ 
+import std.io ; // std::format
+import std.core ; // u64 i = std::core::array_index();
+
 
 enum CompressionType : u32 {
     None = 0,
@@ -157,17 +161,108 @@ for (u32 i = 0; i < header.num_sections; i++) {
 }
 */
 
+
+struct GR2Refer {
+    u32         m_Section ;
+    u32         m_Offset ;
+    
+}[[name(GR2Refer_Name(this))]];
+
+fn GR2Refer_Name( auto data ) {
+    return std::format( "( Ref {} at {} )" ,
+        data.m_Section ,
+        data.m_Offset 
+    );
+};
+
+enum GR2CompType : u32 {
+    None = 0,
+    Oodle0 = 1,
+    Oodle1 = 2,
+    Oodle4 = 4
+};
+
+struct GR2Section {
+    GR2CompType m_Compression ;
+    u32         m_Offset ;
+    u32         m_Size ;
+    u32         uncompressed_size;
+    u32         alignment;
+    u32         first16bit;
+    u32         first8bit;
+    u32         relocations_offset;
+    u32         num_relocations;
+    u32         mixed_marshalling_data_offset;
+    u32         num_mixed_marshalling_data;
+    
+}[[name(GR2Section_Name(this))]] ;
+
+fn GR2Section_Name( auto data ) {
+    return std::format( "( {} )( Offse:{}, Size:{} )" ,
+        data.m_Compression , 
+        data.m_Offset , 
+        data.m_Size 
+    );
+};
+
+
+struct GR2Data {
+
+    u64 i = std::core::array_index() ;
+    u64 s = parent.m_Sections[i].m_Size ;
+    u64 o = parent.m_Sections[i].m_Offset ;
+    
+    u8          m_Data[ parent.m_Sections[i].m_Size ] @ parent.m_Sections[i].m_Offset ;
+
+};
+
+
 struct GR2Header {
     u8          m_Magic[16] ;
     u32         m_HeaderSize ;
     u32         m_HeaderFormat ;
     u32         m_Reserved1 ;
     u32         m_Reserved2 ;
+    
+    u32         m_Version ;
+    u32         m_FileSize ;
+    u32         m_CRC32 ;
+    u32         m_SectionOffset ;
+    u32         m_SectionCount ;
+    GR2Refer    m_RootType ;
+    GR2Refer    m_RootNode ;
+    u32         m_Tag ;
+    u32         m_ExtraTags[4] ;
+    if ( m_Version >= 7 ) {
+        u32     m_StringTableCrc ;
+        u32     m_Reserved3[3] ;
+    }
 
+    GR2Section  m_Sections[ m_SectionCount ] @ m_SectionOffset + 0x20 ;
+    
+    GR2Data     m_SectionDatas[ m_SectionCount ] ;
+    
+    //u64 i = std::core::array_index();
+    
+    
+    /*for ( u32 i=0 , i < 1 , i = i + 1 ) {
+        u32 a ;    
+    }*/
 };
 
 struct GR2File {
     GR2Header   m_Header ;
+    
+}[[name(GR2File_Name(this))]];
+
+fn GR2File_Name( auto data ) {
+    return std::format( "( Fmt:{} )( Ver:{} )( Sections:{} at {} )( Tag:Ox{:x} )" ,
+        data.m_Header.m_HeaderFormat ,
+        data.m_Header.m_Version ,
+        data.m_Header.m_SectionCount ,
+        data.m_Header.m_SectionOffset ,
+        data.m_Header.m_Tag 
+    );
 };
 
 
