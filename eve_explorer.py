@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
@@ -84,9 +85,15 @@ class StatusBar(ttk.Frame):
 
 
 class TreePanel(ttk.Frame):
-    def __init__(self, master: tk.Misc, on_selected: Callable[[str | None], None]) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        on_selected: Callable[[str | None], None],
+        on_extract_requested: Callable[[str], None],
+    ) -> None:
         super().__init__(master, padding=(8, 4, 4, 8))
         self.on_selected = on_selected
+        self.on_extract_requested = on_extract_requested
 
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
@@ -101,9 +108,14 @@ class TreePanel(ttk.Frame):
         self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 
         self.tree.bind("<<TreeviewSelect>>", self._handle_select)
+        self.tree.bind("<Button-3>", self._handle_right_click)
 
         self.node_cache: dict[tuple[str, ...], str] = {}
         self.item_to_logical: dict[str, str] = {}
+        self.context_target_logical: str | None = None
+
+        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="Extract", command=self._handle_extract_requested)
 
     def clear(self) -> None:
         for item_id in self.tree.get_children():
@@ -170,6 +182,25 @@ class TreePanel(ttk.Frame):
             self.on_selected(None)
             return
         self.on_selected(self.item_to_logical.get(selected[0]))
+
+    def _handle_right_click(self, event: tk.Event[tk.Misc]) -> None:
+        item_id = self.tree.identify_row(event.y)
+        if not item_id:
+            return
+
+        self.tree.selection_set(item_id)
+        self.context_target_logical = self.item_to_logical.get(item_id)
+        state = "normal" if self.context_target_logical else "disabled"
+        self.context_menu.entryconfigure("Extract", state=state)
+
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    def _handle_extract_requested(self) -> None:
+        if self.context_target_logical:
+            self.on_extract_requested(self.context_target_logical)
 
 
 class HexViewer(ttk.Frame):
@@ -449,6 +480,7 @@ class IndexLoader:
 class EVEApp:
     LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
     REMOTE_BASE_URL = "https://resources.eveonline.com"
+    DEFAULT_EXTRACT_DIR = Path(r"E:\myGames-Resources\EVE-DAT")
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -471,7 +503,11 @@ class EVEApp:
         self.pane = ttk.Panedwindow(root, orient="horizontal")
         self.pane.pack(fill="both", expand=True)
 
-        self.tree_panel = TreePanel(self.pane, on_selected=self._on_tree_selected)
+        self.tree_panel = TreePanel(
+            self.pane,
+            on_selected=self._on_tree_selected,
+            on_extract_requested=self._extract_resource_to_folder,
+        )
         self.hex_viewer = HexViewer(self.pane)
         self.pane.add(self.tree_panel, weight=1)
         self.pane.add(self.hex_viewer, weight=3)
@@ -568,6 +604,85 @@ class EVEApp:
                 ]
             )
         )
+
+    def _extract_resource_to_folder(self, logical_path: str) -> None:
+        if self.loaded_indexes is None or self.current_root_path is None:
+            messagebox.showerror("Extract Error", "No EVE root is loaded.")
+            return
+
+        entry = self.loaded_indexes.resource_map.get(logical_path)
+        if entry is None:
+            messagebox.showerror("Extract Error", f"Logical path not found:\n{logical_path}")
+            self.status_bar.set_text(f"Extract failed: logical path not found ({logical_path})")
+            return
+
+        relative_physical = self.loader.resolve_physical_relative(entry)
+        source_path, source_label = self._find_extract_source(relative_physical)
+        if source_path is None:
+            messagebox.showerror(
+                "Extract Error",
+                "Source file does not exist in local ResFiles or cache.\n"
+                f"Logical: {logical_path}\n"
+                f"Physical: {entry.physical_path or '(unknown)'}",
+            )
+            self.status_bar.set_text(f"Extract failed: source not found ({logical_path})")
+            return
+
+        selected_dir = filedialog.askdirectory(
+            title="Select Extract Destination",
+            initialdir=str(self.DEFAULT_EXTRACT_DIR),
+        )
+        if not selected_dir:
+            return
+
+        logical_relative = self._logical_relative_path(logical_path)
+        if logical_relative is None:
+            messagebox.showerror("Extract Error", f"Invalid logical path:\n{logical_path}")
+            self.status_bar.set_text(f"Extract failed: invalid logical path ({logical_path})")
+            return
+
+        destination_path = Path(selected_dir) / logical_relative
+        try:
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, destination_path)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Extract Error",
+                f"Failed to extract file:\n{source_path}\n->\n{destination_path}\n\n{exc}",
+            )
+            self.status_bar.set_text(f"Extract failed: {logical_path}")
+            return
+
+        self.status_bar.set_text(
+            f"Extracted ({source_label}): {logical_path} -> {destination_path}"
+        )
+
+    @staticmethod
+    def _logical_relative_path(logical_path: str) -> Path | None:
+        parts = IndexLoader.logical_to_parts(logical_path)
+        if not parts:
+            return None
+
+        for part in parts:
+            if part in ("", ".", ".."):
+                return None
+
+        return Path(*parts)
+
+    def _find_extract_source(self, relative_physical: str | None) -> tuple[Path | None, str]:
+        if self.current_root_path is None or not relative_physical:
+            return None, ""
+
+        relative = relative_physical.replace("\\", "/").strip("/")
+        local_path = self.current_root_path / "ResFiles" / Path(relative)
+        if local_path.is_file():
+            return local_path, "local"
+
+        cache_path = self.cache_dir / Path(relative)
+        if cache_path.is_file():
+            return cache_path, "cache"
+
+        return None, ""
 
     def _load_resource_bytes(self, relative_physical: str) -> tuple[bytes | None, Path | None, str]:
         if self.current_root_path is None:
