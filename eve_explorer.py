@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 import re
 import shutil
@@ -10,6 +11,13 @@ from typing import Callable
 from urllib.parse import quote
 from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
+
+try:
+    from PIL import Image, ImageTk, UnidentifiedImageError
+except ImportError:  # pragma: no cover - runtime fallback when Pillow is absent
+    Image = None  # type: ignore[assignment]
+    ImageTk = None  # type: ignore[assignment]
+    UnidentifiedImageError = Exception  # type: ignore[assignment]
 
 TreeProgressCallback = Callable[[int, int, str], None]
 
@@ -281,6 +289,52 @@ class HexViewer(ttk.Frame):
         self.text.see(f"{start_line}.0")
 
 
+class ImageViewer(ttk.Frame):
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, padding=(4, 4, 8, 8))
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(self, background="#202020", highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        y_scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        self.canvas.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        self._photo_image: object | None = None
+
+    def clear(self) -> None:
+        self.canvas.delete("all")
+        self.canvas.configure(scrollregion=(0, 0, 0, 0))
+        self._photo_image = None
+
+    def render(self, image_bytes: bytes) -> tuple[bool, str]:
+        if Image is None or ImageTk is None:
+            return False, "Pillow is not available. Install pillow first."
+
+        try:
+            with Image.open(BytesIO(image_bytes)) as opened:
+                image_format = opened.format or "UNKNOWN"
+                pil_image = opened.copy()
+        except UnidentifiedImageError:
+            return False, "Not a supported image stream."
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Image decode failed: {exc}"
+
+        photo = ImageTk.PhotoImage(pil_image)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=photo)
+        self.canvas.configure(scrollregion=(0, 0, photo.width(), photo.height()))
+        self.canvas.xview_moveto(0)
+        self.canvas.yview_moveto(0)
+        self._photo_image = photo
+
+        return True, f"{image_format} {pil_image.width}x{pil_image.height}"
+
+
 class IndexLoader:
     REQUIRED_PATHS = (
         "index_tranquility.txt",
@@ -478,9 +532,21 @@ class IndexLoader:
 
 
 class EVEApp:
-    LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
-    REMOTE_BASE_URL = "https://resources.eveonline.com"
-    DEFAULT_EXTRACT_DIR = Path(r"E:\myGames-Resources\EVE-DAT")
+    LARGE_FILE_THRESHOLD    = 10 * 1024 * 1024
+    REMOTE_BASE_URL         = "https://resources.eveonline.com"
+    DEFAULT_EXTRACT_DIR     = Path(r"E:\myGames-Resources\EVE-DAT")
+    IMAGE_EXTENSIONS        = {
+        ".png",
+        ".dds",
+        ".jpg",
+        ".jpeg",
+        ".bmp",
+        ".tga",
+        ".gif",
+        ".webp",
+        ".tif",
+        ".tiff",
+    }
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -491,16 +557,21 @@ class EVEApp:
         self.loader = IndexLoader()
         self.loaded_indexes: LoadedIndexes | None = None
         self.current_root_path: Path | None = None
-        self.cache_dir = Path(__file__).resolve().parent / "cache"
+        self.cache_dir = Path(__file__).resolve().parent / ".cache"
 
-        self.toolbar = Toolbar(
-            root,
+        self._build_toolbar()
+        self._build_mainframe()
+        self._build_statusbar()
+        
+    def _build_toolbar(self) -> None:
+        self.toolbar = Toolbar(self.root,
             on_open_clicked=self._select_root_directory,
             on_path_entered=self._load_from_path_text,
         )
         self.toolbar.pack(fill="x", side="top")
-
-        self.pane = ttk.Panedwindow(root, orient="horizontal")
+        
+    def _build_mainframe(self) -> None:
+        self.pane = ttk.Panedwindow(self.root, orient="horizontal")
         self.pane.pack(fill="both", expand=True)
 
         self.tree_panel = TreePanel(
@@ -508,14 +579,27 @@ class EVEApp:
             on_selected=self._on_tree_selected,
             on_extract_requested=self._extract_resource_to_folder,
         )
-        self.hex_viewer = HexViewer(self.pane)
-        self.pane.add(self.tree_panel, weight=1)
-        self.pane.add(self.hex_viewer, weight=3)
+        self.preview_panel = ttk.Frame(self.pane)
+        self.preview_panel.rowconfigure(0, weight=1)
+        self.preview_panel.columnconfigure(0, weight=1)
 
-        self.status_bar = StatusBar(root)
+        self.hex_viewer = HexViewer(self.preview_panel)
+        self.image_viewer = ImageViewer(self.preview_panel)
+        self.hex_viewer.grid(row=0, column=0, sticky="nsew")
+        self.image_viewer.grid(row=0, column=0, sticky="nsew")
+        self._show_hex_view()
+
+        self.pane.add(self.tree_panel, weight=1)
+        self.pane.add(self.preview_panel, weight=3)
+
+    def _build_statusbar(self) -> None:
+        self.status_bar = StatusBar(self.root)
         self.status_bar.pack(fill="x", side="bottom")
         self.status_bar.set_text("Select EVE root path.")
-
+        
+        
+        
+        
     def _select_root_directory(self) -> None:
         selected = filedialog.askdirectory(title="Select EVE Root Directory")
         if not selected:
@@ -555,6 +639,8 @@ class EVEApp:
             on_progress=self._on_tree_build_progress,
         )
         self.hex_viewer.clear()
+        self.image_viewer.clear()
+        self._show_hex_view()
         self.status_bar.reset_progress()
         self.status_bar.set_text(
             f"Loaded: {root_path} | tq={len(loaded.tq_paths)} res={len(loaded.res_paths)}"
@@ -563,6 +649,29 @@ class EVEApp:
     def _on_tree_build_progress(self, current: int, total: int, phase: str) -> None:
         self.status_bar.set_progress(current, total, f"{phase}... {current}/{max(total, 1)}")
         self.root.update_idletasks()
+
+    def _show_hex_view(self) -> None:
+        self.image_viewer.grid_remove()
+        self.hex_viewer.grid()
+
+    def _show_image_view(self) -> None:
+        self.hex_viewer.grid_remove()
+        self.image_viewer.grid()
+
+    def _resource_slice(self, data: bytes, offset: int, size: int) -> bytes:
+        if size <= 0 or offset < 0 or offset >= len(data):
+            return data
+        end = min(offset + size, len(data))
+        if end <= offset:
+            return data
+        return data[offset:end]
+
+    def _is_image_resource(self, logical_path: str) -> bool:
+        parts = IndexLoader.logical_to_parts(logical_path)
+        if not parts:
+            return False
+        suffix = Path(parts[-1]).suffix.lower()
+        return suffix in self.IMAGE_EXTENSIONS
 
     def _on_tree_selected(self, logical_path: str | None) -> None:
         if not logical_path:
@@ -584,6 +693,32 @@ class EVEApp:
         if data is None or source_file is None:
             return
 
+        payload = self._resource_slice(data, entry.offset, entry.size)
+        image_preview_error = ""
+
+        if self._is_image_resource(logical_path):
+            rendered, image_info = self.image_viewer.render(payload)
+            if not rendered and payload is not data:
+                rendered, image_info = self.image_viewer.render(data)
+
+            if rendered:
+                self._show_image_view()
+                physical_display = entry.physical_path or "(unknown)"
+                self.status_bar.set_text(
+                    " | ".join(
+                        [
+                            f"Logical: {entry.logical_path}",
+                            f"Physical: {physical_display}",
+                            f"Source: {source_label} ({source_file})",
+                            f"Container Size: {len(data)} bytes",
+                            f"Preview: image ({image_info})",
+                        ]
+                    )
+                )
+                return
+            image_preview_error = image_info
+
+        self._show_hex_view()
         if len(data) >= self.LARGE_FILE_THRESHOLD:
             messagebox.showwarning(
                 "Large File",
@@ -601,6 +736,7 @@ class EVEApp:
                     f"Source: {source_label} ({source_file})",
                     f"Container Size: {len(data)} bytes",
                     f"Highlight: offset={entry.offset} size={entry.size}",
+                    f"Preview: hex{f' (image decode failed: {image_preview_error})' if image_preview_error else ''}",
                 ]
             )
         )
