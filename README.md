@@ -7,6 +7,7 @@ This is a Test Project to Coding with Codex.
 
 - 2026.03.03 (Tue)
   - 웹 다운로드 및 캐싱.  
+  - Pillow 패키지를 통한 이미지 로딩.  
   - 
 - 2026.03.02 (Mon) 
   - 모델은 .gr2 사용됨.  
