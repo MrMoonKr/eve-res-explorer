@@ -39,22 +39,15 @@ class LoadedIndexes:
 
 
 class Toolbar(ttk.Frame):
-    def __init__(
-        self,
-        master: tk.Misc,
-        on_open_clicked: Callable[[], None],
-        on_path_entered: Callable[[str], None],
-    ) -> None:
-        super().__init__(master, padding=(8, 8, 8, 4))
+    def __init__(self, parent, on_open_clicked: Callable[[], None]) -> None:
+        super().__init__(parent, padding=(8, 4))
+        
         self.path_var = tk.StringVar()
 
         self.columnconfigure(0, weight=1)
 
-        self.path_entry = ttk.Entry(self, textvariable=self.path_var)
-        self.path_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.path_entry.bind(
-            "<Return>", lambda _event: on_path_entered(self.path_var.get().strip())
-        )
+        self.path_label = ttk.Label(self, textvariable=self.path_var, anchor="w", relief='solid')
+        self.path_label.grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
         self.open_button = ttk.Button(self, text="📂 Open", command=on_open_clicked)
         self.open_button.grid(row=0, column=1, sticky="e")
@@ -67,15 +60,19 @@ class Toolbar(ttk.Frame):
 
 
 class StatusBar(ttk.Frame):
-    def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, padding=(8, 4))
+    '''
+        Label + Progressbar
+        '''
+    def __init__(self, parent) -> None:
+        super().__init__(parent, padding=(8,4))
+        
         self.columnconfigure(0, weight=1)
 
-        self.label = ttk.Label(self, anchor="w")
+        self.label = ttk.Label(self, anchor="w", relief='solid')
         self.label.grid(row=0, column=0, sticky="ew")
 
         self.progress = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=220)
-        self.progress.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.progress.grid(row=0, column=1, sticky="e", padx=(4, 0))
         self.progress.configure(maximum=1, value=0)
 
     def set_text(self, text: str) -> None:
@@ -531,7 +528,7 @@ class IndexLoader:
         return None
 
 
-class EVEApp:
+class EVEApp(tk.Tk):
     LARGE_FILE_THRESHOLD    = 10 * 1024 * 1024
     REMOTE_BASE_URL         = "https://resources.eveonline.com"
     DEFAULT_EXTRACT_DIR     = Path(r"E:\myGames-Resources\EVE-DAT")
@@ -548,69 +545,64 @@ class EVEApp:
         ".tiff",
     }
 
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("EVE Resource Explorer")
-        self.root.geometry("1280x780")
-        self.root.minsize(960, 600)
+    def __init__(self) -> None:
+        super().__init__()
+        
+        self.title("EVE Resource Explorer")
+        self.geometry("1280x780")
+        self.minsize(960, 600)
+        
+        self._build_toolbar()
+        self._build_mainframe()
+        self._build_statusbar()
 
         self.loader = IndexLoader()
         self.loaded_indexes: LoadedIndexes | None = None
         self.current_root_path: Path | None = None
         self.cache_dir = Path(__file__).resolve().parent / ".cache"
 
-        self._build_toolbar()
-        self._build_mainframe()
-        self._build_statusbar()
-        
     def _build_toolbar(self) -> None:
-        self.toolbar = Toolbar(self.root,
+        self.toolbar = Toolbar(self,
             on_open_clicked=self._select_root_directory,
-            on_path_entered=self._load_from_path_text,
         )
-        self.toolbar.pack(fill="x", side="top")
+        self.toolbar.pack(fill="x", side="top") # 옆으로 펴져서 위에 붙음
         
     def _build_mainframe(self) -> None:
-        self.pane = ttk.Panedwindow(self.root, orient="horizontal")
+        self.pane = ttk.Panedwindow(self, orient="horizontal")
         self.pane.pack(fill="both", expand=True)
 
-        self.tree_panel = TreePanel(
-            self.pane,
+        self.tree_panel = TreePanel(self.pane,
             on_selected=self._on_tree_selected,
             on_extract_requested=self._extract_resource_to_folder,
         )
+        
         self.preview_panel = ttk.Frame(self.pane)
         self.preview_panel.rowconfigure(0, weight=1)
         self.preview_panel.columnconfigure(0, weight=1)
 
         self.hex_viewer = HexViewer(self.preview_panel)
+        
         self.image_viewer = ImageViewer(self.preview_panel)
         self.hex_viewer.grid(row=0, column=0, sticky="nsew")
         self.image_viewer.grid(row=0, column=0, sticky="nsew")
+        
         self._show_hex_view()
 
         self.pane.add(self.tree_panel, weight=1)
         self.pane.add(self.preview_panel, weight=3)
 
     def _build_statusbar(self) -> None:
-        self.status_bar = StatusBar(self.root)
-        self.status_bar.pack(fill="x", side="bottom")
+        self.status_bar = StatusBar(self)
+        self.status_bar.pack(fill="x", side="bottom") # 옆으로 펴져서 아래에 붙음
         self.status_bar.set_text("Select EVE root path.")
-        
-        
-        
-        
+
+
     def _select_root_directory(self) -> None:
         selected = filedialog.askdirectory(title="Select EVE Root Directory")
         if not selected:
             return
         self.toolbar.set_path(selected)
         self._load_root(Path(selected))
-
-    def _load_from_path_text(self, path_text: str) -> None:
-        if not path_text:
-            return
-        self._load_root(Path(path_text))
 
     def _load_root(self, root_path: Path) -> None:
         valid, error = self.loader.validate_root(root_path)
@@ -632,7 +624,7 @@ class EVEApp:
         self.loaded_indexes = loaded
         total_items = len(set(loaded.tq_paths)) + len(set(loaded.res_paths))
         self.status_bar.set_progress(0, total_items, f"Building tree... 0/{total_items}")
-        self.root.update_idletasks()
+        self.update_idletasks()
         self.tree_panel.populate(
             loaded.tq_paths,
             loaded.res_paths,
@@ -648,7 +640,7 @@ class EVEApp:
 
     def _on_tree_build_progress(self, current: int, total: int, phase: str) -> None:
         self.status_bar.set_progress(current, total, f"{phase}... {current}/{max(total, 1)}")
-        self.root.update_idletasks()
+        self.update_idletasks()
 
     def _show_hex_view(self) -> None:
         self.image_viewer.grid_remove()
@@ -845,7 +837,7 @@ class EVEApp:
 
         url = f"{self.REMOTE_BASE_URL}/{relative}"
         self.status_bar.set_text(f"Downloading: {url}")
-        self.root.update_idletasks()
+        self.update_idletasks()
 
         try:
             downloaded = self._download_remote_bytes(relative)
@@ -918,9 +910,8 @@ class EVEApp:
 
 
 def main() -> None:
-    root = tk.Tk()
-    app = EVEApp(root)
-    root.mainloop()
+    app = EVEApp()
+    app.mainloop()
 
 
 if __name__ == "__main__":
